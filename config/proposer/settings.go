@@ -79,13 +79,28 @@ func verifyOption(key string, option *validatorpb.ProposerOptionPayload) error {
 	return nil
 }
 
+// BuilderEntry is one builder in a BuilderConfig, URL is the signed identity.
+type BuilderEntry struct {
+	URL string `json:"url" yaml:"url"`
+	// Pubkey binds trusted execution payments to this builder's on-chain key.
+	Pubkey              string           `json:"pubkey,omitempty" yaml:"pubkey,omitempty"`
+	Proxy               string           `json:"proxy,omitempty" yaml:"proxy,omitempty"`
+	MaxExecutionPayment validator.Uint64 `json:"max_execution_payment,omitempty" yaml:"max_execution_payment,omitempty"`
+	MinBid              validator.Uint64 `json:"min_bid,omitempty" yaml:"min_bid,omitempty"`
+	BuilderBoostFactor  validator.Uint64 `json:"builder_boost_factor,omitempty" yaml:"builder_boost_factor,omitempty"`
+}
+
 // BuilderConfig is the struct representation of the JSON config file set in the validator through the CLI.
 // GasLimit is a number set to help the network decide on the maximum gas in each block.
 type BuilderConfig struct {
 	Enabled             bool             `json:"enabled" yaml:"enabled"`
 	GasLimit            validator.Uint64 `json:"gas_limit,omitempty" yaml:"gas_limit,omitempty"`
-	Relays              []string         `json:"relays,omitempty" yaml:"relays,omitempty"`
+	Builders            []BuilderEntry   `json:"builders,omitempty" yaml:"builders,omitempty"`
 	MaxExecutionPayment validator.Uint64 `json:"max_execution_payment,omitempty" yaml:"max_execution_payment,omitempty"`
+	// Proxy overrides where builder HTTP is sent, builders stay the signed identities.
+	Proxy              string           `json:"proxy,omitempty" yaml:"proxy,omitempty"`
+	MinBid             validator.Uint64 `json:"min_bid,omitempty" yaml:"min_bid,omitempty"`
+	BuilderBoostFactor validator.Uint64 `json:"builder_boost_factor,omitempty" yaml:"builder_boost_factor,omitempty"`
 }
 
 // BuilderConfigFromConsensus converts protobuf to a builder config used in in-memory storage
@@ -97,11 +112,32 @@ func BuilderConfigFromConsensus(from *validatorpb.BuilderConfig) *BuilderConfig 
 		Enabled:             from.Enabled,
 		GasLimit:            from.GasLimit,
 		MaxExecutionPayment: from.MaxExecutionPayment,
+		Proxy:               from.Proxy,
+		MinBid:              from.MinBid,
+		BuilderBoostFactor:  from.BuilderBoostFactor,
 	}
-	if from.Relays != nil {
-		relays := make([]string, len(from.Relays))
-		copy(relays, from.Relays)
-		c.Relays = relays
+	for _, e := range from.Builders {
+		if e.GetUrl() == "" {
+			continue
+		}
+		c.Builders = append(c.Builders, BuilderEntry{
+			URL:                 e.Url,
+			Pubkey:              e.Pubkey,
+			Proxy:               e.Proxy,
+			MaxExecutionPayment: e.MaxExecutionPayment,
+			MinBid:              e.MinBid,
+			BuilderBoostFactor:  e.BuilderBoostFactor,
+		})
+	}
+	// relays is the deprecated name for builders, read as a fallback.
+	if len(c.Builders) == 0 && len(from.Relays) > 0 {
+		log.Warn("Proposer settings builder.relays is deprecated, use builder.builders entries")
+		for _, r := range from.Relays {
+			if r == "" {
+				continue
+			}
+			c.Builders = append(c.Builders, BuilderEntry{URL: r})
+		}
 	}
 	return c
 }
@@ -242,11 +278,13 @@ func (bc *BuilderConfig) Clone() *BuilderConfig {
 	c.Enabled = bc.Enabled
 	c.GasLimit = bc.GasLimit
 	c.MaxExecutionPayment = bc.MaxExecutionPayment
-	var relays []string
-	if bc.Relays != nil {
-		relays = make([]string, len(bc.Relays))
-		copy(relays, bc.Relays)
-		c.Relays = relays
+	c.Proxy = bc.Proxy
+	c.MinBid = bc.MinBid
+	c.BuilderBoostFactor = bc.BuilderBoostFactor
+	if bc.Builders != nil {
+		builders := make([]BuilderEntry, len(bc.Builders))
+		copy(builders, bc.Builders)
+		c.Builders = builders
 	}
 	return c
 }
@@ -266,14 +304,21 @@ func (bc *BuilderConfig) ToConsensus() *validatorpb.BuilderConfig {
 	}
 	c := &validatorpb.BuilderConfig{}
 	c.Enabled = bc.Enabled
-	var relays []string
-	if bc.Relays != nil {
-		relays = make([]string, len(bc.Relays))
-		copy(relays, bc.Relays)
-		c.Relays = relays
+	for _, e := range bc.Builders {
+		c.Builders = append(c.Builders, &validatorpb.BuilderEntry{
+			Url:                 e.URL,
+			Pubkey:              e.Pubkey,
+			Proxy:               e.Proxy,
+			MaxExecutionPayment: e.MaxExecutionPayment,
+			MinBid:              e.MinBid,
+			BuilderBoostFactor:  e.BuilderBoostFactor,
+		})
 	}
 	c.GasLimit = bc.GasLimit
 	c.MaxExecutionPayment = bc.MaxExecutionPayment
+	c.Proxy = bc.Proxy
+	c.MinBid = bc.MinBid
+	c.BuilderBoostFactor = bc.BuilderBoostFactor
 	return c
 }
 
